@@ -1,53 +1,37 @@
-# Reflection: Profile Comparisons
+## Responsible AI
 
----
+### Limitations and biases
 
-## Pop / Happy vs. High-Energy Rock
+The most honest thing I can say about GrooveMatch is that it reflects the taste of whoever built the catalog, not the diversity of people who might use it. All 18 songs skew toward Western pop-adjacent genres — there is no K-pop, no Afrobeats, no reggaeton, no classical Indian music. A user whose entire musical world lives outside those 18 genres will receive recommendations that miss the point entirely, not because the algorithm failed but because the data never represented them in the first place. That is a bias baked in before a single line of code runs.
 
-These two profiles both want high energy, but they pull the rankings in completely different directions once genre and mood enter the picture.
+Beyond the catalog, the scoring system has structural biases too. The binary genre and mood matching means semantically similar categories — "chill" and "relaxed," "indie pop" and "pop" — score zero for each other. The system treats them as completely different when a human listener would consider them nearly identical. The energy feature carries three times the weight of genre under the experimental settings, which means an energetic song in the wrong genre can outrank a calm song in exactly the right genre. That may not match what the user actually wants.
 
-The pop/happy listener gets *Sunrise City* at #1 with nearly a perfect score — it matches genre, mood, energy, valence, and tempo all at once. The rock/intense listener gets *Storm Runner* at #1 for the same reason. Both results feel exactly right.
+Finally, the confidence auto-broadening that kicks in below 30% silently drops the user's genre preference. The system makes a unilateral decision to ignore part of the request without telling the user it did so. That is a transparency problem even if the results end up better.
 
-What is interesting is what happens at #2. For the pop listener, *Gym Hero* shows up even though it is labeled "intense" not "happy." For the rock listener, *Gym Hero* also shows up at #2 even though it is a pop song, not rock — it earns that slot purely because "intense" is a mood match and its energy (0.93) is very close to the rock target (0.90). The same song finds a way into the top 3 for both profiles by exploiting different parts of the scoring system. This tells you that *Gym Hero* is a generalist song that fits many high-energy profiles, not because it is the best match for any of them, but because it scores solidly on almost every axis.
+### Could this be misused?
 
----
+Music recommendation feels harmless, but the patterns here generalize to things that are not. The same RAG + agent architecture used to recommend songs could recommend products, news articles, or political content — and the same biases (narrow catalog, weighted scoring, silent fallback behavior) would follow along. At catalog scale, a system like this could be used to create filter bubbles, suppressing certain genres or artists in favor of others without any user-visible explanation.
 
-## Chill Lofi vs. Adversarial — High-Energy + Sad
+Within the scope of GrooveMatch specifically, the main misuse risk is the Claude preference extractor: a user could craft a query designed to probe what Claude knows about music outside the catalog, or to trick the extractor into producing preference values that surface a specific song repeatedly. The anti-hallucination guard prevents Claude from inventing songs, but it does not prevent a determined user from gaming the scoring weights through carefully worded queries.
 
-These two profiles are almost complete opposites, and the contrast in results shows exactly how the scoring responds to extreme inputs.
+The most practical prevention already in the codebase is the fixed, transparent catalog: every recommendation comes from a known list of 18 songs that anyone can read in `data/songs.csv`. There is no hidden ranking, no paid placement, no personalization history. For a larger system, rate limiting, audit logging of what queries were made and what was returned, and human review of edge-case outputs would all be necessary before deployment.
 
-The lofi listener gets a clean, logical top 3: two lofi/chill songs that are almost perfect matches, followed by a third lofi song that only misses on mood ("focused" instead of "chill"). The recommendations feel calm and coherent — a person studying or relaxing would be happy with any of these.
+### What surprised me during reliability testing
 
-The adversarial profile asks for something that does not really exist in the catalog: pop music that is high-energy but also sad and emotionally dark (valence 0.15). The system cannot satisfy all of those at once. What it returns instead is the highest-scoring pop songs by energy, which happen to be cheerful gym tracks. *Gym Hero* at #1 for a sad listener is the clearest example of the scoring logic being "tricked" — not because the math is broken, but because genre loyalty (2.0 points) outweighs the emotional mismatch (only 1.0 point for mood, and partial valence penalty). In plain terms: the system knows you want pop, so it gives you pop, and then pretends the sadness part does not matter as much.
+Two things genuinely surprised me. The first was how high the adversarial confidence scores came back — 72% for the high-energy + sad profile and 75% for the no-genre-match profile. I expected those to be much lower, close to the 30% threshold that triggers broadened search. What the numbers revealed is that energy and valence proximity alone, without any genre or mood match, can still produce a reasonably strong retrieval score. The system is more forgiving of categorical mismatches than the original README's weight rationale suggested.
 
----
+The second surprise was that an empty preferences dictionary — no genre, no mood, no numeric targets — returns five results without crashing and without any special handling. The scoring loop simply scores everything at zero and returns the first five songs in whatever order they appear in the CSV. That is technically correct graceful degradation, but it also means the system silently returns meaningless results rather than telling the user their input was empty. A responsible system would surface that to the user instead.
 
-## High-Energy Rock vs. Adversarial — High-Energy + Sad
+### Collaboration with AI during this project
 
-Both profiles want high energy and fast tempo, but one has a coherent genre+mood (rock/intense) and the other has a contradictory mood (pop/sad).
+This project was built in direct collaboration with Claude. The process was iterative: I described what I wanted the system to do, Claude proposed implementations, and I reviewed and adjusted them.
 
-The rock profile gets five songs where energy proximity is doing real work — *Storm Runner* is a near-perfect fit and the fallbacks are genuinely high-energy alternatives across different genres. The order makes sense.
+**One instance where the AI was genuinely helpful:** The two-Claude-call architecture — separating preference extraction from recommendation generation into two distinct API calls with separate system prompts — was Claude's suggestion. My instinct was to do everything in one prompt, which would have been cheaper but much harder to debug. The split design meant that when something went wrong, I could immediately tell whether the failure was in the extraction step (bad structured preferences) or the generation step (bad selection from candidates). That separation made the whole system more transparent and testable, and it directly enabled prompt caching on each system prompt independently.
 
-The adversarial profile gets a mess at positions 3–5 — *Sunrise City* (a happy pop anthem), *Bone Cold* (an angry metal track), and *Storm Runner* (a rock song the user never asked for). Each song is winning on a different sub-score: *Sunrise City* on genre, *Bone Cold* on energy+valence proximity, *Storm Runner* on energy+tempo. The system has no way to reconcile the conflicting inputs, so different songs win for different reasons. A human music curator looking at this list would immediately notice that none of these songs actually belong together — you would never put a gym pop anthem, an angry metal track, and a driving rock song on the same "sad" playlist.
+**One instance where the AI was flawed:** When asked to create `readme1.md` as a separate file, Claude confirmed it was created — but the content was actually written into `README.md`, silently overwriting the original project README. The tool reported success, the file appeared to exist in conversation context, and the AI summarized what it had done with complete confidence. The error only became visible when the file was not where it was supposed to be. This is a precise example of the reliability problem with AI systems: confident output is not the same as correct output, and the system has no reliable way to flag its own mistakes in the moment they happen. Verification has to come from the human side.
 
----
+Building GrooveMatch taught me that the hardest part of an AI application is not the model call — it's everything around it. Deciding what context to retrieve, how to measure whether retrieval was good enough, and how to validate that the AI's response only references real data: these are the problems that determine whether the system is reliable in production, and none of them are solved by the model itself.
 
-## Chill Lofi vs. Adversarial — No Genre Match (Country)
+The agentic confidence check was the most instructive piece to build. In the original rule-based system, a country-music query on a catalog with one country song would silently return that one song as #1 and fill the rest with numerical proximity matches — technically correct, but not useful. The agentic version detects the low confidence and automatically retries with broader parameters, which feels more like how a human music advisor would respond: *"I don't have much in that genre, but based on the vibe you're describing, here are songs that might still hit right."* That shift — from blind rule execution to goal-directed problem-solving — is the core idea behind agentic AI, and seeing it play out at a small scale made the concept concrete.
 
-Both profiles want relaxed, mid-valence listening, but one has strong catalog support (lofi has 3 songs) and the other has almost none (country has 1 song).
-
-The lofi profile produces the most consistent recommendations in the entire test — three lofi songs in the top 3, all scoring above 4.9. The catalog depth gives the system real choices, and the results feel like a coherent playlist.
-
-The country profile has to improvise after *Rust & Rain* at #1. The system falls back to happy-mood songs with similar energy and valence — indie pop, regular pop, r&b — which are not country at all, but happen to fit numerically. This is graceful degradation: the recommender does not crash or return garbage, it just quietly switches from "give you your genre" to "give you the closest vibe." A real listener might actually appreciate some of these fallbacks, but they would also notice immediately that none of them sound like country music.
-
----
-
-## Original Weights vs. Experimental Weights (Weight Shift)
-
-The weight shift experiment — halving the genre bonus from 2.0 to 1.0 and doubling the energy weight from 1.5 to 3.0 — made one thing better and one thing worse.
-
-Better: the adversarial sad profile now surfaces *Bone Cold* at #2. A dark, angry metal song with very low valence (0.18) is actually a more emotionally appropriate recommendation for someone asking for sad/dark music than *Sunrise City* is, even though it is a different genre. When energy matters more, songs that genuinely match the "feel" of the request can overcome genre mismatch.
-
-Worse: the country profile's only country song (*Rust & Rain*) barely beats an indie pop song for the #1 spot — 4.87 vs 4.81. The margin is so thin that a small catalog change could flip the order. Genre preference is something listeners feel strongly about, and a system that makes it nearly ignorable will frustrate users who care about it.
-
-The original weights are more predictable and genre-loyal. The experimental weights are more emotionally sensitive but less genre-faithful. Neither is strictly correct — the right balance depends on what kind of listener you are designing for.
+I also came away with a sharper sense of where AI adds value versus where it adds risk. Claude's explanations are genuinely better than the raw score breakdowns from the original system — more readable, more contextual, and more persuasive. But Claude can also confidently hallucinate a song that doesn't exist in the catalog, which the rule-based layer never would. Every powerful capability comes paired with a new failure mode, which is why the guardrail and test suite exist. For any real deployment, the testing and validation layer is not optional — it's what makes the system trustworthy enough to hand to a user.

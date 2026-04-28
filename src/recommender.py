@@ -1,6 +1,9 @@
 import csv
+import logging
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class Song:
@@ -40,13 +43,28 @@ class Recommender:
 
     def recommend(self, user: UserProfile, k: int = 5) -> List[Song]:
         """Return the top-k songs from the catalog for the given user profile."""
-        # TODO: Implement recommendation logic
-        return self.songs[:k]
+        prefs = {"genre": user.favorite_genre, "mood": user.favorite_mood,
+                 "target_energy": user.target_energy}
+        song_dicts = [_song_to_dict(s) for s in self.songs]
+        results = recommend_songs(prefs, song_dicts, k=k)
+        id_to_song = {s.id: s for s in self.songs}
+        return [id_to_song[r[0]["id"]] for r in results]
 
     def explain_recommendation(self, user: UserProfile, song: Song) -> str:
         """Return a human-readable string explaining why a song was recommended."""
-        # TODO: Implement explanation logic
-        return "Explanation placeholder"
+        prefs = {"genre": user.favorite_genre, "mood": user.favorite_mood,
+                 "target_energy": user.target_energy}
+        _, reasons = score_song(prefs, _song_to_dict(song))
+        return " | ".join(reasons) if reasons else "no strong matches"
+
+def _song_to_dict(song: "Song") -> Dict:
+    return {
+        "id": song.id, "title": song.title, "artist": song.artist,
+        "genre": song.genre, "mood": song.mood, "energy": song.energy,
+        "tempo_bpm": song.tempo_bpm, "valence": song.valence,
+        "danceability": song.danceability, "acousticness": song.acousticness,
+    }
+
 
 def load_songs(csv_path: str) -> List[Dict]:
     """
@@ -69,7 +87,7 @@ def load_songs(csv_path: str) -> List[Dict]:
                 row[field] = float(row[field])
             songs.append(row)
 
-    print(f"Loaded songs: {len(songs)}")
+    logger.info("Loaded %d songs from %s", len(songs), csv_path)
     return songs
 
 def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:

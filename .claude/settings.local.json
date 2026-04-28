@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python -m src.main)",
       "Bash(python3 -c ' *)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -m pytest tests/ -v)"
     ]
   }
 }
